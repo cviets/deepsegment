@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepsegment"
+version = "0.0.1"
+description = "Cell segmentation from HCS images"
+readme = "README.md"
+requires-python = ">=3.6"
+authors = [
+    { name = "Chris Viets" }
+]
+dependencies = [
+    "tifffile",
+    "numpy",
+    "torch",
+    "torchvision",
+    "dlmbl-unet @ git+https://github.com/ai-mbl/dlmbl-unet.git@main"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/cviets/deepsegment"
+"Bug Tracker" = "https://github.com/cviets/deepsegment/issues"
+
+[project.scripts]
+deepsegment = "deepsegment.cli:main"
