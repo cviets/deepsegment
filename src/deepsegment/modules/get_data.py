@@ -4,6 +4,7 @@ import os
 from torchvision.transforms import v2
 import tifffile
 import numpy as np
+from .reorder_files import reorder_files
 
 def minmax(inp):
 
@@ -36,13 +37,13 @@ class MaskDataset(Dataset):
 
         image_dir = os.path.join(root_dir, "images")
         mask_dir = os.path.join(root_dir, "masks")
-
-        # TODO: reorder masks to be in same order as images
         
         self.images = os.listdir(image_dir)
-        self.masks = os.listdir(mask_dir)
+        masks = os.listdir(mask_dir)
+        self.masks = reorder_files(masks, self.images)
         assert len(self.images) > 0, "No training images found"
-        assert len(self.images) == len(self.masks), f"Must have equal amounts of training images ({len(self.images)}) as annotated masks ({len(self.masks)})"
+        assert len(self.images) == len(self.masks), \
+            f"Must have equal amounts of training images ({len(self.images)}) as annotated masks ({len(self.masks)})"
 
         # initial_img_transforms = v2.Compose([
         #     v2.Normalize([0]*2, [1]*2)

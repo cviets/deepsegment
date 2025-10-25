@@ -15,7 +15,7 @@ def reorder_files(list_a, list_b):
         cur_filename, _ = os.path.splitext(tail)
         for full_path in list_a:
             head_a, tail_a = os.path.split(full_path)
-            filename = os.path.splitext(tail_a)
+            filename, _ = os.path.splitext(tail_a)
             if filename == cur_filename + "_mask":
                 out[i] = full_path
 
