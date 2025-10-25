@@ -16,6 +16,8 @@ dependencies = [
     "numpy",
     "torch",
     "torchvision",
+    "tensorboard",
+    "PyYAML",
     "dlmbl-unet @ git+https://github.com/ai-mbl/dlmbl-unet.git@main"
 ]
 

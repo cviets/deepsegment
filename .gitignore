@@ -2,3 +2,8 @@
 images/*
 .tif
 .tiff
+src/deepsegment.egg-info/*
+runs/*
+src/deepsegment/__pycache__/*
+src/deepsegment/modules/__pycache__/*
+tests/__pycache__/*

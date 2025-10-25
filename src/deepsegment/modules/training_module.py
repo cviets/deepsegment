@@ -6,8 +6,8 @@ def train(
     optimizer,
     loss_function,
     epoch,
-    log_interval=100,
-    log_image_interval=20,
+    log_interval,
+    log_image_interval,
     tb_logger=None,
     device=None,
     early_stop=False,
@@ -28,26 +28,23 @@ def train(
     model = model.to(device)
 
     # iterate over the batches of this epoch
-    for batch_id, (x, y, *w) in enumerate(loader):
+    for batch_id, (image, mask, loss_weights) in enumerate(loader):
         # move input and target to the active device (either cpu or gpu)
-        if len(w) > 0:
-            w = w[0]
-            w = w.to(device)
-        else:
-            w = None
-        x, y = x.to(device), y.to(device)
+        if loss_weights is not None:
+            loss_weights = loss_weights.to(device)
+        image, mask = image.to(device), mask.to(device)
 
         # zero the gradients for this iteration
         optimizer.zero_grad()
 
         # apply model and calculate loss
-        prediction = model(x)
-        assert prediction.shape == y.shape, (prediction.shape, y.shape)
-        if y.dtype != prediction.dtype:
-            y = y.type(prediction.dtype)
-        loss = loss_function(prediction, y)
-        if w is not None:
-            weighted_loss = loss * w
+        prediction = model(image)
+        assert prediction.shape == mask.shape, (prediction.shape, mask.shape)
+        if mask.dtype != prediction.dtype:
+            mask = mask.type(prediction.dtype)
+        loss = loss_function(prediction, mask)
+        if loss_weights is not None:
+            weighted_loss = loss * loss_weights
             loss = torch.mean(weighted_loss)
 
         # backpropagate the loss and adjust the parameters
@@ -59,8 +56,8 @@ def train(
             print(
                 "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
                     epoch,
-                    batch_id * len(x),
-                    len(loader.dataset),
+                    batch_id,
+                    len(loader),
                     100.0 * batch_id / len(loader),
                     loss.item(),
                 )
@@ -74,15 +71,18 @@ def train(
             )
             # check if we log images in this iteration
             if step % log_image_interval == 0:
+                image_ = torch.cat((image, torch.zeros(size=(image.shape[0], 1, image.shape[2], image.shape[3]))), axis=1)
                 tb_logger.add_images(
-                    tag="input", img_tensor=x.to("cpu"), global_step=step
+                    tag="input", img_tensor=image_.to("cpu"), global_step=step
                 )
+                mask_ = torch.cat((mask, torch.zeros(size=(mask.shape[0], 1, mask.shape[2], mask.shape[3]))), axis=1)
                 tb_logger.add_images(
-                    tag="target", img_tensor=y.to("cpu"), global_step=step
+                    tag="target", img_tensor=mask_.to("cpu"), global_step=step
                 )
+                pred_ = torch.cat((prediction, torch.zeros(size=(prediction.shape[0], 1, prediction.shape[2], prediction.shape[3]))), axis=1)
                 tb_logger.add_images(
                     tag="prediction",
-                    img_tensor=prediction.to("cpu").detach(),
+                    img_tensor=pred_.to("cpu").detach(),
                     global_step=step,
                 )
 
@@ -136,17 +136,25 @@ def validate(
     # disable gradients during validation
     with torch.no_grad():
         # iterate over validation loader and update loss and metric values
-        for x, y in loader:
-            x, y = x.to(device), y.to(device)
-            prediction = model(x)
+        for image, mask, loss_weights in loader:
+
+            if loss_weights is not None:
+                loss_weights = loss_weights.to(device)
+            image, mask = image.to(device), mask.to(device)
+
             # We *usually* want the target to be the same type as the prediction
             # however this is very dependent on your choice of loss function and
             # metric. If you get errors such as "RuntimeError: Found dtype Float but expected Short"
             # then this is where you should look.
-            if y.dtype != prediction.dtype:
-                y = y.type(prediction.dtype)
-            val_loss += loss_function(prediction, y).item()
-            val_metric += metric(prediction > 0.5, y).item()
+            prediction = model(image)
+            assert prediction.shape == mask.shape, (prediction.shape, mask.shape)
+            if mask.dtype != prediction.dtype:
+                mask = mask.type(prediction.dtype)
+            loss = loss_function(prediction, mask)
+            if loss_weights is not None:
+                weighted_loss = loss * loss_weights
+            val_loss += torch.mean(weighted_loss)
+            val_metric += metric(prediction > 0.5, mask).item()
 
     # normalize loss and metric
     val_loss /= len(loader)
@@ -161,10 +169,13 @@ def validate(
             tag="val_metric", scalar_value=val_metric, global_step=step
         )
         # we always log the last validation images
-        tb_logger.add_images(tag="val_input", img_tensor=x.to("cpu"), global_step=step)
-        tb_logger.add_images(tag="val_target", img_tensor=y.to("cpu"), global_step=step)
+        image_ = torch.cat((image, torch.zeros(size=(image.shape[0], 1, image.shape[2], image.shape[3]))), axis=1)
+        tb_logger.add_images(tag="val_input", img_tensor=image_.to("cpu"), global_step=step)
+        mask_ = torch.cat((mask, torch.zeros(size=(mask.shape[0], 1, mask.shape[2], mask.shape[3]))), axis=1)
+        tb_logger.add_images(tag="val_target", img_tensor=mask_.to("cpu"), global_step=step)
+        pred_ = torch.cat((prediction, torch.zeros(size=(prediction.shape[0], 1, prediction.shape[2], prediction.shape[3]))), axis=1)
         tb_logger.add_images(
-            tag="val_prediction", img_tensor=prediction.to("cpu"), global_step=step
+            tag="val_prediction", img_tensor=pred_.to("cpu"), global_step=step
         )
 
     print(
