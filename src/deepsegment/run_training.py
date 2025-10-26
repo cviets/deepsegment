@@ -15,11 +15,11 @@ def run_training(root_dir, epochs, learning_rate, val_ratio, batch_size, crop_si
         transform=v2.Compose([
             v2.RandomRotation(45), 
             v2.RandomVerticalFlip(0.5),
-            v2.RandomAffine(10, shear=(-15,15,-15,15)),
+            v2.RandomAffine(10, shear=(-10,10,-10,10)),
             v2.RandomCrop(crop_size)   
         ]),
         img_transform=v2.Compose([
-            v2.GaussianBlur([7,3], sigma=[1.5,0.5]),
+            v2.GaussianBlur(21, sigma=0.1),
             # v2.Lambda(salt_and_pepper_noise)
         ]),
         weighted=True

@@ -76,17 +76,22 @@ class MaskDataset(Dataset):
         return len(self.images)
 
     def __getitem__(self, idx):
-        image = self.images[idx]
-        mask = self.masks[idx]
-
         if self.transform is not None:
-            seed = torch.seed()
-            torch.manual_seed(seed)
-            image = self.transform(image)
+            all_background = True
+            while all_background:
+                seed = torch.seed()
+                torch.manual_seed(seed)
+                image = self.transform(self.images[idx])
 
-            seed = torch.seed()
-            torch.manual_seed(seed)
-            mask = self.transform(mask)
+                torch.manual_seed(seed)
+                mask = self.transform(self.masks[idx])
+
+                # make sure that the random crop contains a cell and not just background
+                if not torch.all(mask==0):
+                    all_background = False
+        else:
+            image = self.images[idx]
+            mask = self.masks[idx]
 
         if self.img_transform is not None:
             image = self.img_transform(image)
@@ -98,7 +103,7 @@ class MaskDataset(Dataset):
             weights = torch.zeros_like(mask)
             weights[mask != 0] = 1
 
-            # from MBL:
+            # # from MBL:
             # weights[mask == 0] = np.clip(
             #     mask.numel()
             #     / 2
