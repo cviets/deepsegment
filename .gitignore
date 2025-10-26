@@ -2,8 +2,11 @@
 images/*
 .tif
 .tiff
+<<<<<<< HEAD
 src/deepsegment.egg-info/*
 runs/*
 src/deepsegment/__pycache__/*
 src/deepsegment/modules/__pycache__/*
 tests/__pycache__/*
+=======
+>>>>>>> 71deff9 (changed gitignore)
