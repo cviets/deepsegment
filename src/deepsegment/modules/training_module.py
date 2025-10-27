@@ -1,4 +1,13 @@
 import torch
+import torch.nn.functional as F
+
+def convert_to_onehot(mask, num_classes):
+    mask_vis = torch.zeros(size=(mask.shape[0], num_classes, mask.shape[1], mask.shape[2]))
+    assert mask_vis[:,0,:,:].shape == mask.shape, f"Shape mismatch {mask_vis[0].shape} vs {mask.shape}"
+    mask_vis[:,0,:,:] = mask==2
+    mask_vis[:,1,:,:] = mask==1
+
+    return mask_vis
 
 def train(
     model,
@@ -28,10 +37,10 @@ def train(
     model = model.to(device)
 
     # iterate over the batches of this epoch
-    for batch_id, (image, mask, loss_weights) in enumerate(loader):
-        # move input and target to the active device (either cpu or gpu)
-        if loss_weights is not None:
-            loss_weights = loss_weights.to(device)
+    for batch_id, (image, mask) in enumerate(loader):
+
+        # if loss_weights is not None:
+        #     loss_weights = loss_weights.to(device)
         image, mask = image.to(device), mask.to(device)
 
         # zero the gradients for this iteration
@@ -39,13 +48,25 @@ def train(
 
         # apply model and calculate loss
         prediction = model(image)
-        assert prediction.shape == mask.shape, (prediction.shape, mask.shape)
-        if mask.dtype != prediction.dtype:
-            mask = mask.type(prediction.dtype)
         loss = loss_function(prediction, mask)
-        if loss_weights is not None:
-            weighted_loss = loss * loss_weights
-            loss = torch.mean(weighted_loss)
+
+        # If this is a CrossEntropy-style setup (logits + class-index mask), compute
+        # per-class loss contributions for logging. Otherwise fall back to generic loss.
+
+        per_pixel = F.cross_entropy(prediction, mask, reduction="none")
+
+        # log per-class average loss to tensorboard if logger provided
+        if tb_logger is not None:
+            num_classes = prediction.shape[1]
+            step = epoch * len(loader) + batch_id
+            for c in range(num_classes):
+                mask_c = (mask == c)
+                if mask_c.any():
+                    avg_c = per_pixel[mask_c].mean().item()
+                else:
+                    avg_c = float('nan')
+                tb_logger.add_scalar(tag=f"train_loss_class_{c}", scalar_value=avg_c, global_step=step)
+            
 
         # backpropagate the loss and adjust the parameters
         loss.backward()
@@ -75,14 +96,24 @@ def train(
                 tb_logger.add_images(
                     tag="input", img_tensor=image_.to("cpu"), global_step=step
                 )
-                mask_ = torch.cat((mask, torch.zeros(size=(mask.shape[0], 1, mask.shape[2], mask.shape[3]))), axis=1)
+
+                pred_idx = prediction.argmax(dim=1)
+
+                mask_vis = convert_to_onehot(mask, num_classes=3)
+                pred_vis = convert_to_onehot(pred_idx, num_classes=3)
+
+                # pad to 3 channels if needed for tensorboard
+                if mask_vis.shape[1] == 1:
+                    mask_vis = torch.cat((mask_vis, torch.zeros(size=(mask_vis.shape[0], 1, mask_vis.shape[2], mask_vis.shape[3]))), axis=1)
+                if pred_vis.shape[1] == 1:
+                    pred_vis = torch.cat((pred_vis, torch.zeros(size=(pred_vis.shape[0], 1, pred_vis.shape[2], pred_vis.shape[3]))), axis=1)
+
                 tb_logger.add_images(
-                    tag="target", img_tensor=mask_.to("cpu"), global_step=step
+                    tag="target", img_tensor=mask_vis.to("cpu"), global_step=step
                 )
-                pred_ = torch.cat((prediction, torch.zeros(size=(prediction.shape[0], 1, prediction.shape[2], prediction.shape[3]))), axis=1)
                 tb_logger.add_images(
                     tag="prediction",
-                    img_tensor=pred_.to("cpu").detach(),
+                    img_tensor=pred_vis.to("cpu").detach(),
                     global_step=step,
                 )
 
@@ -136,10 +167,7 @@ def validate(
     # disable gradients during validation
     with torch.no_grad():
         # iterate over validation loader and update loss and metric values
-        for image, mask, loss_weights in loader:
-
-            if loss_weights is not None:
-                loss_weights = loss_weights.to(device)
+        for image, mask in loader:
             image, mask = image.to(device), mask.to(device)
 
             # We *usually* want the target to be the same type as the prediction
@@ -147,14 +175,36 @@ def validate(
             # metric. If you get errors such as "RuntimeError: Found dtype Float but expected Short"
             # then this is where you should look.
             prediction = model(image)
-            assert prediction.shape == mask.shape, (prediction.shape, mask.shape)
-            if mask.dtype != prediction.dtype:
-                mask = mask.type(prediction.dtype)
-            loss = loss_function(prediction, mask)
-            if loss_weights is not None:
-                weighted_loss = loss * loss_weights
-            val_loss += torch.mean(weighted_loss)
-            val_metric += metric(prediction > 0.5, mask).item()
+
+            # For CrossEntropy-style predictions (logits + class-index mask) compute per-class
+            # validation loss contributions for logging and metric computation. Otherwise fall back
+            # to the generic loss/metric code path.
+
+            per_pixel = F.cross_entropy(prediction, mask, reduction="none")
+            batch_loss = loss_function(prediction, mask)
+            # metric: try to compute per-class dice by converting to one-hot if metric expects that
+            try:
+                pred_idx = prediction.argmax(dim=1)  # (N,H,W)
+                pred_onehot = F.one_hot(pred_idx, num_classes=prediction.shape[1]).permute(0,3,1,2).float()
+                target_onehot = F.one_hot(mask, num_classes=prediction.shape[1]).permute(0,3,1,2).float()
+                metric_val = metric(pred_onehot, target_onehot).item()
+            except Exception:
+                # fallback: pass class indices
+                metric_val = metric(pred_idx, mask).item()
+
+            # log per-class validation losses when a tb_logger is provided
+            if tb_logger is not None:
+                num_classes = prediction.shape[1]
+                for c in range(num_classes):
+                    mask_c = (mask == c)
+                    if mask_c.any():
+                        avg_c = per_pixel[mask_c].mean().item()
+                    else:
+                        avg_c = float('nan')
+                    tb_logger.add_scalar(tag=f"val_loss_class_{c}", scalar_value=avg_c, global_step=step if step is not None else 0)
+
+            val_loss += batch_loss
+            val_metric += metric_val
 
     # normalize loss and metric
     val_loss /= len(loader)
@@ -171,15 +221,26 @@ def validate(
         # we always log the last validation images
         image_ = torch.cat((image, torch.zeros(size=(image.shape[0], 1, image.shape[2], image.shape[3]))), axis=1)
         tb_logger.add_images(tag="val_input", img_tensor=image_.to("cpu"), global_step=step)
-        mask_ = torch.cat((mask, torch.zeros(size=(mask.shape[0], 1, mask.shape[2], mask.shape[3]))), axis=1)
-        tb_logger.add_images(tag="val_target", img_tensor=mask_.to("cpu"), global_step=step)
-        pred_ = torch.cat((prediction, torch.zeros(size=(prediction.shape[0], 1, prediction.shape[2], prediction.shape[3]))), axis=1)
-        tb_logger.add_images(
-            tag="val_prediction", img_tensor=pred_.to("cpu"), global_step=step
-        )
+
+        pred_idx = prediction.argmax(dim=1)
+
+        mask_vis = convert_to_onehot(mask, num_classes=3)
+        pred_vis = convert_to_onehot(pred_idx, num_classes=3)
+
+        # pad to 3rd channel for tensorboard if needed
+        if pred_vis.shape[1] == 1:
+            pred_vis = torch.cat((pred_vis, torch.zeros(size=(pred_vis.shape[0], 1, pred_vis.shape[2], pred_vis.shape[3]))), axis=1)
+        if mask_vis.shape[1] == 1:
+            mask_vis = torch.cat((mask_vis, torch.zeros(size=(mask_vis.shape[0], 1, mask_vis.shape[2], mask_vis.shape[3]))), axis=1)
+
+        tb_logger.add_images(tag="val_target", img_tensor=mask_vis.to("cpu"), global_step=step)
+        tb_logger.add_images(tag="val_prediction", img_tensor=pred_vis.to("cpu"), global_step=step)
 
     print(
         "\nValidate: Average loss: {:.4f}, Average Metric: {:.4f}\n".format(
             val_loss, val_metric
         )
     )
+
+    # return values so callers (e.g. run_training) can step schedulers based on val loss
+    return val_loss, val_metric
